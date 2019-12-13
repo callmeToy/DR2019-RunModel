@@ -48,11 +48,11 @@ class CarControl:
 
     turning_index = 0
     # Map 1
-    turning_timing = [500, 200, 100, 0]
-    turning_duration = [2200, 2200, 2000, 1500]
+    # turning_timing = [500, 200, 100, 0]
+    # turning_duration = [2200, 2200, 2000, 1500]
 
     # Map 2
-    # turning_timing = [0, 100, 400, 300]
+    # turning_timing = [0, 0, 400, 300]
     # turning_duration = [2200, 2200, 2200, 2000]
     
     # Map 3
@@ -61,19 +61,26 @@ class CarControl:
 
     # Map 4
     # turning_timing = [300, 0, 0]
-    # turning_duration = [1800, 1800, 1800]
+    # turning_duration = [1800, 2000, 1500]
+
+    # Map 5
+    turning_timing = [200, 200, 0, 0]
+    turning_duration = [1800, 1500, 1300, 1500]
 
     prev_I = 0
     prev_error = 0
     last_itr = 0
     tm = None
 
+
+    start_turning = 0
     left_turn_count = 0
     right_turn_count = 0
     prepare_to_turn = False
     prev_sign = 0 #0 is none, -1 is left, 1 is right
 
     fetching_image = True
+    cropped_sign = None
     sign = None
     road = None
     car = None
@@ -140,28 +147,22 @@ class CarControl:
         sign_model = self.get_run_model('./Saved Models/Model/Sign.json', './Saved Models/Weights/sign.h5')
         pred_img = np.zeros((1, 64, 64, 3))
         prediction = sign_model.predict(pred_img)
-        start_turning = 0
         print('Sign thread online')
 
         while True:
             if not (self.sign is None):
-                bnds = self.get_bounding_rect(self.sign)
-                if len(bnds) == 0 or (bnds is None):
-                    if start_turning == 0:
-                        self.prepare_to_turn = False
-                else:
-                    for rect in bnds:
-                        cropped_sign = self.sign_image[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]]
-                        cropped_sign = cv2.resize(cropped_sign, (64, 64))
-                        self.get_turn_direction(sign_model.predict(np.expand_dims(cropped_sign, axis=0)))
+                if (self.cropped_sign is not None):
+                    self.cropped_sign = cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB)
+                    self.get_turn_direction(sign_model.predict(np.expand_dims(self.cropped_sign, axis=0)))
+                    self.cropped_sign = None
 
                 if not self.prepare_to_turn:
                     if self.right_turn_count > 0 or self.left_turn_count > 0:
-                        if start_turning == 0: #if the car is not starting to turn
-                            start_turning = self.tm.millis()
-                        elif self.tm.millis() - start_turning <= self.turning_timing[self.turning_index]:
+                        if self.start_turning == 0: #if the car is not starting to turn
+                            self.start_turning = self.tm.millis()
+                        elif self.tm.millis() - self.start_turning <= self.turning_timing[self.turning_index]:
                             pass
-                        elif self.tm.millis() - start_turning <= self.turning_duration[self.turning_index]: #if the car is already turning
+                        elif self.tm.millis() - self.start_turning <= self.turning_duration[self.turning_index]: #if the car is already turning
                             if self.left_turn_count == self.right_turn_count:
                                 if self.prev_sign != 0:
                                     self.right_turn_count += self.prev_sign
@@ -182,7 +183,7 @@ class CarControl:
                             print('Finished turning')
                             self.sign_image = None
                             self.turning = False
-                            start_turning = 0
+                            self.start_turning = 0
                             self.left_turn_count = 0
                             self.right_turn_count = 0
                             self.turning_index += 1
@@ -239,8 +240,15 @@ class CarControl:
                 pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_OPEN, kernel5)
                 pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_CLOSE, kernel5)
                 self.sign = pred_sign
-                if len(np.where(pred_sign == 1)[0] > 50):
-                    self.sign_image = np.copy(self.image_feed)
+                if True:
+                    bnds = self.get_bounding_rect(pred_sign)
+                    if len(bnds) == 0 or (bnds is None):
+                        if self.start_turning == 0:
+                            self.prepare_to_turn = False
+                    else:
+                        for rect in bnds:
+                            cropped = self.image_feed[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]]
+                            self.cropped_sign = cv2.resize(cropped, (64, 64))
                 if len(np.where(pred_car == 1)[0] > 0):
                     self.car_image = np.copy(pred_road)
                 
@@ -255,22 +263,26 @@ class CarControl:
                 if not self.turning:
                     curr_speed = 60
                     offset = 0
-                    kP = 0.04
+                    kP = 0.02
                     kI = 0.05
-                    kD = 60
+                    kD = 120
 
                     car_pxs = len(np.where(self.car == 1)[0])
                     if car_pxs > 500:
                         curr_speed -= 5
                         kP = 0.04
                         kI = 0.02
-                        offset = self.find_car_offset(self.car_image, self.car, 6)
+                        offset = self.find_car_offset(self.car_image, self.car, 4)
 
                     angle = self.calc_pid(self.road_error, kP, kI, kD)
 
-                    if self.sign_image is not None:
+                    if self.left_turn_count > 0 or self.right_turn_count > 0:
                         curr_speed -= 10
-                        print('Sign detected')
+                        print('Prepare to turn ', end='')
+                        if (self.left_turn_count > self.right_turn_count):
+                            print('left')
+                        else:
+                            print('right')
 
                     self.final_speed = curr_speed - abs(angle * 0.6)
                     self.final_angle = angle + offset
@@ -372,13 +384,14 @@ class CarControl:
 
     def get_turn_direction(self, predicted):
         predicted = predicted[0]
-        if abs(predicted[0] - 1) < 0.1:
+        print(predicted)
+        if abs(predicted[1] - 1) < 0.1:
             self.prepare_to_turn = True
             if (self.prev_sign == 0):    
                 self.prev_sign = 1
             self.right_turn_count += 1
             print('Right sign')
-        elif abs(predicted[1] - 1) < 0.1:
+        elif abs(predicted[2] - 1) < 0.1:
             self.prepare_to_turn = True
             if self.prev_sign == 0:    
                 self.prev_sign = -1
@@ -474,8 +487,8 @@ class CarControl:
         '''
         Return [speed, streering angle] of the next control
         '''
-        print('Speed: {0:.0f}'.format(self.final_speed), end='')
-        print(', Angle: {0:.2f}'.format(self.final_angle))
+        # print('Speed: {0:.0f}'.format(self.final_speed), end='')
+        # print(', Angle: {0:.2f}'.format(self.final_angle))
         return [self.final_speed, self.final_angle]
 
 class TimeMetrics:
