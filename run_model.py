@@ -64,10 +64,10 @@ class CarControl:
 
     # Map 4
     # turning_timing = [300, 0, 0]
-    # turning_duration = [1800, 2000, 1500]
+    # turning_duration = [1300, 1500, 1000]
 
     # Map 5
-    turning_timing = [200, 400, 100, 50, 200]
+    turning_timing = [200, 400, 200, 0, 200]
     turning_duration = [1500, 1300, 1300, 1500, 1500]
 
     distances = None
@@ -87,6 +87,7 @@ class CarControl:
     last_turn_finished = 0
 
     fetching_image = True
+    segmenting = False
     cropped_sign = None
     sign = None
     road = None
@@ -164,6 +165,10 @@ class CarControl:
             self.frame_count += 1
         self.last_image_time = self.tm.millis()
 
+    def save_sign(self, sign):
+        path = pkg_path + '/scripts/Signs_data/{}.jpg'.format(self.tm.millis())
+        cv2.imwrite(path, sign)
+    
     def sign_thread(self):
         sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign.json', pkg_path + '/scripts/Saved Models/Weights/sign.h5')
         # sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign_new.json', pkg_path + '/scripts/Saved Models/Weights/sign_new.h5')
@@ -174,17 +179,19 @@ class CarControl:
         while True:
             if self.sign is not None or (self.left_turn_count > 0 or self.right_turn_count > 0):
                 if (self.cropped_sign is not None):
+                    # self.save_sign(self.cropped_sign)
                     self.cropped_sign = cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB)
                     self.get_turn_direction(sign_model.predict(np.expand_dims(self.cropped_sign, axis=0)))
                     self.cropped_sign = None
 
                 elif (self.left_turn_count > 0 or self.right_turn_count > 0):
-                    if (self.tm.millis() - self.last_sign_spotted) > 2000:
+                    if (self.tm.millis() - self.last_sign_spotted) > 2100:
                         print('Safety timer triggered')
                         self.prepare_to_turn = False
                         self.right_turn_count = 0
                         self.left_turn_count = 0
                         self.turning_index = 0
+                        self.start_turning = 0
 
                 if (not self.prepare_to_turn):
                     if self.right_turn_count > 0 or self.left_turn_count > 0:
@@ -229,14 +236,32 @@ class CarControl:
         print('Road thread online')
         while True:
             if not (self.road is None):
-                self.distances = self.distance_matrix(self.road)
-                
-                # for ins in distance_matrix:
-                #     cv2.circle(cln_img, (ins[0], ins[1]), 3, (255, 255, 0), -1)
-                #     cv2.circle(cln_img, (ins[2], ins[3]), 3, (255, 255, 0), -1)
+                sl = np.sum(self.road[:, :160])
+                sr = np.sum(self.road[:, 160:])
 
-                self.road_error = self.error_matrix_method(self.distances)
-                self.road = None
+                if sl + sr < 50:
+                    print('Reset detected')
+                    self.prepare_to_turn = False
+                    self.right_turn_count = 0
+                    self.left_turn_count = 0
+                    self.turning_index = 0
+                    self.start_turning = 0
+                elif (sl < 50):
+                    print('Outline right')
+                    self.road_error = 200
+                elif (sr < 50):
+                    print('Outline left')
+                    self.road_error = -200
+                else:
+                    self.distances = self.distance_matrix(self.road)
+                    
+                    # for ins in distance_matrix:
+                    #     cv2.circle(cln_img, (ins[0], ins[1]), 3, (255, 255, 0), -1)
+                    #     cv2.circle(cln_img, (ins[2], ins[3]), 3, (255, 255, 0), -1)
+
+                    self.road_error = self.error_matrix_method(self.distances)
+                    # print(self.road_error)
+                    self.road = None
             else:
                 time.sleep(0.000001)
 
@@ -252,12 +277,15 @@ class CarControl:
 
         while True:
             if not self.fetching_image:
+                self.segmenting = True
                 pred_img = np.expand_dims(self.image_feed, axis = 0)
                 prediction = run_model.predict(pred_img)
 
                 pred_road = prediction[0, :, :, 0]
 
                 pred_sign = prediction[0, :, :, 2]
+                if (np.sum(pred_sign) > 50):
+                    self.sign_image = self.image_feed.copy()
 
                 pred_car = prediction[0, :, :, 3]
                 pred_car = 1 - pred_car
@@ -270,13 +298,17 @@ class CarControl:
                 
                 if len(bnds) == 0 or (bnds is None):
                     if self.start_turning == 0:
-                        self.prepare_to_turn = False
+                        if self.prepare_to_turn:
+                            self.prepare_to_turn = False
+                            print('Start turning')
                 else:
                     for rect in bnds:
-                        cropped = self.image_feed[rect[1]:rect[1] + rect[3], rect[0]:rect[0] + rect[2]]
+                        offset_h = int(rect[3] * 0.2)
+                        offset_w = int(rect[2] * 0.2)
+                        cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
                         self.cropped_sign = cv2.resize(cropped, (64, 64))
                     self.last_sign_spotted = self.tm.millis()
-
+                self.segmenting = False
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_OPEN, kernel5)
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_CLOSE, kernel5)
                 
@@ -289,6 +321,8 @@ class CarControl:
                 
                 self.car = pred_car
             else:
+                if self.tm.millis() - self.last_image_time > 2 * self.mean_time:
+                    self.fetching_image = True
                 time.sleep(0.000001)
 
     def decide_thread(self):
@@ -313,12 +347,14 @@ class CarControl:
 
                     # if self.left_turn_count > 0 or self.right_turn_count > 0:
                     if self.prepare_to_turn:
-                        curr_speed -= 10
+                        curr_speed -= 15
                         print('Prepare to turn ', end='')
                         if (self.left_turn_count > self.right_turn_count):
                             print('left')
-                        else:
+                        elif (self.left_turn_count < self.right_turn_count):
                             print('right')
+                        else:
+                            print('up the music ey ey ey')
 
                     self.final_speed = curr_speed - abs(angle * 0.6)
                     self.final_angle = angle + offset
@@ -560,7 +596,8 @@ class ROSControl:
         Callback function to refresh the image feed when there is one available
         '''
         try:
-            if self.cControl.fetching_image:
+            # if self.cControl.fetching_image:
+            if True:
                 Array_JPG = np.fromstring(data.data, np.uint8)
                 cv_image = cv2.imdecode(Array_JPG, cv2.IMREAD_COLOR)
                 self.cControl.refresh_image(cv_image)
@@ -607,6 +644,11 @@ class ROSControl:
 
                 # if self.cControl.cropped_sign is not None:
                 #     cv2.imshow('sign', self.cControl.cropped_sign)
+                #     if cv2.waitKey(1) & 0xFF == ord('q'):
+                #         break
+
+                # if self.cControl.road is not None:
+                #     cv2.imshow('feed', self.cControl.road)
                 #     if cv2.waitKey(1) & 0xFF == ord('q'):
                 #         break
             else:
