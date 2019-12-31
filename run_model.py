@@ -63,12 +63,12 @@ class CarControl:
     # turning_duration = [1800, 1800]
 
     # Map 4
-    turning_timing = [300, 0, 0]
-    turning_duration = [1300, 1500, 1000]
+    # turning_timing = [300, 0, 0]
+    # turning_duration = [1300, 1500, 1000]
 
     # Map 5
-    # turning_timing = [100, 400, 100, 0, 200]
-    # turning_duration = [1100, 1300, 1100, 1100, 1200]
+    turning_timing = [100, 500, 100, 0, 200]
+    turning_duration = [1100, 1300, 1100, 1100, 1200]
 
     distances = None
 
@@ -332,15 +332,15 @@ class CarControl:
                 if not self.turning:
                     curr_speed = 60
                     offset = 0
-                    kP = 0.04
-                    kI = 0.06
-                    kD = 100
+                    kP = 0.10
+                    kI = 0.005
+                    kD = 320
 
                     car_pxs = len(np.where(self.car == 1)[0])
                     if car_pxs > 500:
                         curr_speed -= 5
-                        kP = 0.05
-                        kI = 0.02
+                        kP += 0.02
+                        kI += 0.0
                         offset = self.find_car_offset(self.car_image, self.car, 4)
 
                     angle = self.calc_pid(self.road_error, kP, kI, kD)
@@ -356,7 +356,7 @@ class CarControl:
                         else:
                             print('up the music ey ey ey')
 
-                    self.final_speed = curr_speed - abs(angle * 0.6)
+                    self.final_speed = curr_speed - abs(angle * 1.2)
                     self.final_angle = angle + offset
                     self.fetching_image = True
             else:
