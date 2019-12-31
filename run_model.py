@@ -63,12 +63,12 @@ class CarControl:
     # turning_duration = [1800, 1800]
 
     # Map 4
-    # turning_timing = [300, 0, 0]
-    # turning_duration = [1300, 1500, 1000]
+    turning_timing = [300, 0, 0]
+    turning_duration = [1300, 1500, 1000]
 
     # Map 5
-    turning_timing = [200, 400, 200, 0, 200]
-    turning_duration = [1500, 1300, 1300, 1500, 1500]
+    # turning_timing = [100, 400, 100, 0, 200]
+    # turning_duration = [1100, 1300, 1100, 1100, 1200]
 
     distances = None
 
@@ -208,13 +208,13 @@ class CarControl:
                                 # print('Turning left')
                                 self.turning = True
                                 self.final_speed = 30
-                                self.final_angle = -20
+                                self.final_angle = -30
                                 pass
                             elif self.right_turn_count > self.left_turn_count:
                                 # print('Turning right')
                                 self.turning = True
                                 self.final_speed = 30
-                                self.final_angle = 20
+                                self.final_angle = 30
                                 pass
                         else: #if the turn procedure finished
                             print('Finished turning')
@@ -278,14 +278,15 @@ class CarControl:
         while True:
             if not self.fetching_image:
                 self.segmenting = True
-                pred_img = np.expand_dims(self.image_feed, axis = 0)
+                image_feed = self.image_feed.copy()
+                pred_img = np.expand_dims(image_feed, axis = 0)
                 prediction = run_model.predict(pred_img)
 
                 pred_road = prediction[0, :, :, 0]
 
                 pred_sign = prediction[0, :, :, 2]
                 if (np.sum(pred_sign) > 50):
-                    self.sign_image = self.image_feed.copy()
+                    self.sign_image = image_feed.copy()
 
                 pred_car = prediction[0, :, :, 3]
                 pred_car = 1 - pred_car
@@ -296,15 +297,14 @@ class CarControl:
                 self.sign = pred_sign
                 bnds = self.get_bounding_rect(pred_sign)
                 
-                if len(bnds) == 0 or (bnds is None):
-                    if self.start_turning == 0:
-                        if self.prepare_to_turn:
-                            self.prepare_to_turn = False
-                            print('Start turning')
+                if bnds is None or len(bnds) == 0:
+                    if self.prepare_to_turn:
+                        self.prepare_to_turn = False
+                        print('Start turning')
                 else:
                     for rect in bnds:
-                        offset_h = int(rect[3] * 0.2)
-                        offset_w = int(rect[2] * 0.2)
+                        offset_h = int(rect[3] * 0.2) * 0
+                        offset_w = int(rect[2] * 0.2) * 0
                         cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
                         self.cropped_sign = cv2.resize(cropped, (64, 64))
                     self.last_sign_spotted = self.tm.millis()
@@ -445,15 +445,23 @@ class CarControl:
         return error * 0.5
         
     def get_bounding_rect(self, sign):
-        contours = None
-        sign *= 255
-        sign = sign.astype(np.uint8)
-        contours, _ = cv2.findContours(sign, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+        if np.sum(sign) < 80:
+            return None
+
+        sign = (sign*255).astype(np.uint8)
+        ret, labels = cv2.connectedComponents(sign)
+        lbls = np.unique(labels)
         bnds = []
-        for c in contours:
-            rect = cv2.boundingRect(c)
-            if rect[2] * rect[3] > 80 and rect[0] < 280:
-                bnds.append(rect)
+        area = 80
+        for l in reversed(lbls[:ret]):
+            on = np.where(labels == l)
+            bndb = [on[1].min(), on[0].min(), on[1].max(), on[0].max()]
+            bndb[2] = bndb[2] - bndb[0]
+            bndb[3] = bndb[3] - bndb[1]
+            if bndb[0] != 0 and bndb[1] != 0 and bndb[0] < 280:
+                if bndb[2] * bndb[3] > area:
+                    bnds = [bndb]
         bnds = np.array(bnds, np.uint16)
         return bnds
 
@@ -642,10 +650,10 @@ class ROSControl:
                 self.newImage = False
                 self.newControl = True
 
-                # if self.cControl.cropped_sign is not None:
-                #     cv2.imshow('sign', self.cControl.cropped_sign)
-                #     if cv2.waitKey(1) & 0xFF == ord('q'):
-                #         break
+                if self.cControl.cropped_sign is not None:
+                    cv2.imshow('sign', self.cControl.cropped_sign)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
 
                 # if self.cControl.road is not None:
                 #     cv2.imshow('feed', self.cControl.road)
