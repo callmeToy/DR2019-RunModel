@@ -49,27 +49,6 @@ def ros_print(content):
 
 class CarControl:
 
-    turning_index = 0
-    # Map 1
-    turning_timing = [500, 200, 100, 0]
-    turning_duration = [2200, 2200, 2000, 1500]
-
-    # Map 2
-    # turning_timing = [0, 0, 400, 300]
-    # turning_duration = [2200, 2200, 2200, 2000]
-    
-    # Map 3
-    # turning_timing = [0, 100]
-    # turning_duration = [1800, 1800]
-
-    # Map 4
-    # turning_timing = [300, 0, 0]
-    # turning_duration = [1300, 1500, 1000]
-
-    # Map 5
-    # turning_timing = [100, 500, 100, 0, 200]
-    # turning_duration = [1100, 1300, 1100, 1100, 1200]
-
     distances = None
 
     prev_I = 0
@@ -87,10 +66,11 @@ class CarControl:
     last_turn_finished = 0
 
     fetching_image = True
-    segmenting = False
     cropped_sign = None
     sign = None
     road = None
+    put_mask = False
+    early_stop = False
     car = None
     sign_image = None
     car_image = None
@@ -144,6 +124,10 @@ class CarControl:
         self.deg_55 = np.zeros((240, 320))
         cv2.line(self.deg_55, (502, 0), (160, 240), (1), 2)
         cv2.line(self.deg_55, (-182, 0), (160, 240), (1), 2)
+
+        self.deg_65 = np.zeros((240, 320))
+        cv2.line(self.deg_65, (530, 0), (160, 240), (1), 2)
+        cv2.line(self.deg_65, (-210, 0), (160, 240), (1), 2)
         
         Thread(target=self.seg_thread).start()
         Thread(target=self.road_thread).start()
@@ -177,61 +161,33 @@ class CarControl:
         print('Sign thread online')
 
         while True:
-            if self.sign is not None or (self.left_turn_count > 0 or self.right_turn_count > 0):
-                if (self.cropped_sign is not None):
-                    # self.save_sign(self.cropped_sign)
-                    self.cropped_sign = cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB)
-                    self.get_turn_direction(sign_model.predict(np.expand_dims(self.cropped_sign, axis=0)))
-                    self.cropped_sign = None
+            if self.cropped_sign is not None:
+                pred_sign = np.expand_dims(cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB), 0)
+                prediction = sign_model.predict(pred_sign)
+                prediction = prediction[0]
 
-                elif (self.left_turn_count > 0 or self.right_turn_count > 0):
-                    if (self.tm.millis() - self.last_sign_spotted) > 2100:
-                        print('Safety timer triggered')
-                        self.prepare_to_turn = False
-                        self.right_turn_count = 0
-                        self.left_turn_count = 0
-                        self.turning_index = 0
-                        self.start_turning = 0
-                        self.turning = False
-
-                if (not self.prepare_to_turn):
-                    if self.right_turn_count > 0 or self.left_turn_count > 0:
-                        if self.start_turning == 0: #if the car is not starting to turn
-                            self.start_turning = self.tm.millis()
-                        elif self.tm.millis() - self.start_turning <= self.turning_timing[self.turning_index] * self.mean_time / self.base_time:
-                            pass
-                        elif self.tm.millis() - self.start_turning <= self.turning_duration[self.turning_index] * self.mean_time / self.base_time: #if the car is already turning
-                            if self.left_turn_count == self.right_turn_count:
-                                if self.prev_sign != 0:
-                                    self.right_turn_count += self.prev_sign
-
-                            if self.left_turn_count > self.right_turn_count:
-                                # print('Turning left')
-                                self.turning = True
-                                self.final_speed = 30
-                                self.final_angle = -30
-                                pass
-                            elif self.right_turn_count > self.left_turn_count:
-                                # print('Turning right')
-                                self.turning = True
-                                self.final_speed = 30
-                                self.final_angle = 30
-                                pass
-                        else: #if the turn procedure finished
-                            print('Finished turning')
-                            self.sign_image = None
-                            self.turning = False
-                            self.start_turning = 0
-                            self.left_turn_count = 0
-                            self.right_turn_count = 0
-                            self.turning_index += 1
-                            self.last_turn_finished = self.tm.millis()
-                            if self.turning_index == len(self.turning_timing):
-                                self.turning_index = 0
-
-                self.sign = None
+                idx = np.argmax(prediction)
+                if idx == 1: #Right sign
+                    print('Right sign')
+                    self.prepare_to_turn = True
+                    self.right_turn_count += 1
+                elif idx == 2: #Left sign
+                    print('Left sign')
+                    self.prepare_to_turn = True
+                    self.left_turn_count += 1
+                else: #Dont know
+                    print('No idea')
+                    self.prepare_to_turn = True
+                self.last_sign_spotted = self.tm.millis()
+                self.cropped_sign = None
             else:
                 time.sleep(0.000001)
+
+    def cancel_operation(self):
+        self.turning = False
+        self.prepare_to_turn = False
+        self.right_turn_count = 0
+        self.left_turn_count = 0
 
     def road_thread(self):
         print('Road thread online')
@@ -254,14 +210,7 @@ class CarControl:
                     print('Outline left')
                     self.road_error = -200
                 else:
-                    self.distances = self.distance_matrix(self.road)
-                    
-                    # for ins in distance_matrix:
-                    #     cv2.circle(cln_img, (ins[0], ins[1]), 3, (255, 255, 0), -1)
-                    #     cv2.circle(cln_img, (ins[2], ins[3]), 3, (255, 255, 0), -1)
-
-                    self.road_error = self.error_matrix_method(self.distances)
-                    # print(self.road_error)
+                    self.road_error = self.error_matrix_method(self.road.copy())
                     self.road = None
             else:
                 time.sleep(0.000001)
@@ -278,7 +227,6 @@ class CarControl:
 
         while True:
             if not self.fetching_image:
-                self.segmenting = True
                 image_feed = self.image_feed.copy()
                 pred_img = np.expand_dims(image_feed, axis = 0)
                 prediction = run_model.predict(pred_img)
@@ -309,7 +257,6 @@ class CarControl:
                         cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
                         self.cropped_sign = cv2.resize(cropped, (64, 64))
                     self.last_sign_spotted = self.tm.millis()
-                self.segmenting = False
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_OPEN, kernel5)
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_CLOSE, kernel5)
                 
@@ -330,55 +277,81 @@ class CarControl:
         print('Control thread online')
         while True:
             if (not self.fetching_image) and self.ready:
-                if not self.turning:
-                    curr_speed = 60
-                    offset = 0
-                    kP = 0.10
-                    kI = 0.005
-                    kD = 320
-
-                    car_pxs = len(np.where(self.car == 1)[0])
-                    if car_pxs > 500:
-                        curr_speed -= 5
-                        kP += 0.02
-                        kI += 0.0
-                        offset = self.find_car_offset(self.car_image, self.car, 4)
-
-                    angle = self.calc_pid(self.road_error, kP, kI, kD)
-
-                    # if self.left_turn_count > 0 or self.right_turn_count > 0:
-                    if self.prepare_to_turn:
-                        curr_speed -= 15
-                        print('Prepare to turn ', end='')
-                        if (self.left_turn_count > self.right_turn_count):
-                            print('left')
-                        elif (self.left_turn_count < self.right_turn_count):
-                            print('right')
+                curr_speed = 60
+                offset = 0
+                kP = 0.10
+                kI = 0.005
+                kD = 320
+                if self.prepare_to_turn:
+                    curr_speed -= 15
+                    print('Prepare to turn ', end='')
+                    if (self.left_turn_count > self.right_turn_count):
+                        print('left')
+                    elif (self.left_turn_count < self.right_turn_count):
+                        print('right')
+                    else:
+                        print('up the music ey ey ey')
+                else:
+                    if self.left_turn_count + self.right_turn_count > 0:
+                        if self.early_stop:
+                            self.left_turn_count = 0
+                            self.right_turn_count = 0
+                            self.put_mask = False
+                            self.early_stop = False
+                            print('Early stop')
+                        elif self.tm.millis() - self.last_sign_spotted < 3000:
+                            curr_speed -= 10
+                            self.put_mask = True
+                            kP -= 0.03
+                            kI += 0.15
+                            if self.left_turn_count > self.right_turn_count:
+                                offset = 4
+                            elif self.right_turn_count > self.left_turn_count:
+                                offset = -4
                         else:
-                            print('up the music ey ey ey')
+                            self.left_turn_count = 0
+                            self.right_turn_count = 0
+                            self.put_mask = False
+                            print('Stop drawing')
+                    else:
+                        car_pxs = len(np.where(self.car == 1)[0])
+                        if car_pxs > 500:
+                            curr_speed -= 5
+                            kP += 0.02
+                            kI += 0.0
+                            offset = self.find_car_offset(self.car_image, self.car, 4)
 
+                angle = self.calc_pid(self.road_error, kP, kI, kD)
+
+                if self.put_mask:
+                    self.final_speed = curr_speed - abs(angle * 0.6)
+                else:
                     self.final_speed = curr_speed - abs(angle * 1.2)
-                    self.final_angle = angle + offset
-                    self.fetching_image = True
+                self.final_angle = angle + offset
+                self.fetching_image = True
             else:
                 time.sleep(0.000001)
 
     def draw_left_mask(self, road):
+        print('Drawing left mask')
         road_trace = np.where(road[:, :50] == 1)
+        if len(road_trace[1]) == 0:
+            return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
         yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
         xx = (min_y, max_y)
         poly = np.polyfit(xx, yy, 1)
         if poly[0] < -0.5:
+            self.early_stop = True
             return road
         yy = poly[0] * np.arange(320) + poly[1]
         
-        right_trace = np.where(road[120:, 200:] == 0)
+        right_trace = np.where(road[120:, 220:] == 0)
         if (len(right_trace[1]) == 0):
-            umin_x = 200
+            umin_x = 220
         else:
-            umin_x = right_trace[0].min() + 200
+            umin_x = right_trace[0].min() + 220
         
         for i in range(320):
             road[0:int(yy[i]), i] = 0
@@ -387,25 +360,29 @@ class CarControl:
         return road
 
     def draw_right_mask(self, road):
+        print('Drawing right mask')
         road_trace = np.where(road[:, 270:] == 1)
+        if len(road_trace[1]) == 0:
+            return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
         yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
         xx = (min_y + 270, max_y + 270)
         poly = np.polyfit(xx, yy, 1)
-        if poly[0] > 0.5:
+        if poly[0] > 0.25:
+            self.early_stop = True
             return road
         yy = poly[0] * np.arange(320) + poly[1]
         
-        right_trace = np.where(road[120:, :120] == 0)
+        right_trace = np.where(road[120:, :140] == 0)
         if (len(right_trace[1]) == 0):
-            umin_x = 200
+            umin_x = 140
         else:
             umin_x = right_trace[0].max()
         
         for i in range(320):
             road[0:int(yy[i]), i] = 0
-            if i < umin_x:
+            if i < 80:
                 road[:, i] = 0
         return road
         
@@ -481,14 +458,26 @@ class CarControl:
             angle *= -1
         return angle
 
-    def error_matrix_method(self, matrix):
+    def error_matrix_method(self, road):
+
+        if self.put_mask:
+            weights = [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 2.1]
+            if self.left_turn_count > self.right_turn_count:
+                road = self.draw_left_mask(road)
+            elif self.right_turn_count > self.left_turn_count:
+                road = self.draw_right_mask(road)
+        else:
+            weights = [0.1, 0.3, 0.7, 1.1, 1.5, 0.0, 0.0]
+
+        cv2.imshow('road', road)
+        if cv2.waitKey(1):
+            pass
+
+        matrix = self.distance_matrix(road)
         matrix = matrix.astype(np.int64)
-        # print(matrix)
-        weights = [0.1, 0.3, 0.7, 1.1, 1.5, 1.7]
         error = 0
-        for i in range(5):
+        for i in range(len(weights)):
             error += (matrix[i, 1] - matrix[i, 3]) * weights[i]
-            # print(error)
         return error * 0.5
         
     def get_bounding_rect(self, sign):
@@ -511,26 +500,6 @@ class CarControl:
                     bnds = [bndb]
         bnds = np.array(bnds, np.uint16)
         return bnds
-
-    def get_turn_direction(self, predicted):
-        if self.tm.millis() - self.last_turn_finished < 1000:
-            return
-        predicted = predicted[0]
-        if abs(predicted[1] - 1) < 0.1:
-            self.prepare_to_turn = True
-            if (self.prev_sign == 0):    
-                self.prev_sign = 1
-            self.right_turn_count += 1
-            print('Right sign')
-        elif abs(predicted[2] - 1) < 0.1:
-            self.prepare_to_turn = True
-            if self.prev_sign == 0:    
-                self.prev_sign = -1
-            self.left_turn_count += 1
-            print('Left sign')
-        else:
-            self.prepare_to_turn = True
-            print('No idea')
     
     def find_intersection(self, image, deg):
         inters = np.empty((4))
@@ -562,7 +531,7 @@ class CarControl:
         return inters
                     
     def distance_matrix(self, road):
-        intersections = np.empty((5, 4), np.uint16)
+        intersections = np.empty((7, 4), np.uint16)
         road = (road * 255).astype(np.uint8)
         ctns, _ = cv2.findContours(road, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         zeros = np.zeros(road.shape)
@@ -574,6 +543,8 @@ class CarControl:
         intersections[2] = self.find_intersection(zeros, self.deg_25)
         intersections[3] = self.find_intersection(zeros, self.deg_35)
         intersections[4] = self.find_intersection(zeros, self.deg_45)
+        intersections[5] = self.find_intersection(zeros, self.deg_55)
+        intersections[6] = self.find_intersection(zeros, self.deg_65)
         
         return intersections
     
@@ -697,10 +668,10 @@ class ROSControl:
                 self.newImage = False
                 self.newControl = True
 
-                if self.cControl.cropped_sign is not None:
-                    cv2.imshow('sign', self.cControl.cropped_sign)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
+                # if self.cControl.cropped_sign is not None:
+                #     cv2.imshow('sign', self.cControl.cropped_sign)
+                #     if cv2.waitKey(1) & 0xFF == ord('q'):
+                #         break
 
                 # if self.cControl.road is not None:
                 #     cv2.imshow('feed', self.cControl.road)
