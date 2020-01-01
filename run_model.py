@@ -51,8 +51,8 @@ class CarControl:
 
     turning_index = 0
     # Map 1
-    # turning_timing = [500, 200, 100, 0]
-    # turning_duration = [2200, 2200, 2000, 1500]
+    turning_timing = [500, 200, 100, 0]
+    turning_duration = [2200, 2200, 2000, 1500]
 
     # Map 2
     # turning_timing = [0, 0, 400, 300]
@@ -67,8 +67,8 @@ class CarControl:
     # turning_duration = [1300, 1500, 1000]
 
     # Map 5
-    turning_timing = [100, 500, 100, 0, 200]
-    turning_duration = [1100, 1300, 1100, 1100, 1200]
+    # turning_timing = [100, 500, 100, 0, 200]
+    # turning_duration = [1100, 1300, 1100, 1100, 1200]
 
     distances = None
 
@@ -192,6 +192,7 @@ class CarControl:
                         self.left_turn_count = 0
                         self.turning_index = 0
                         self.start_turning = 0
+                        self.turning = False
 
                 if (not self.prepare_to_turn):
                     if self.right_turn_count > 0 or self.left_turn_count > 0:
@@ -361,6 +362,52 @@ class CarControl:
                     self.fetching_image = True
             else:
                 time.sleep(0.000001)
+
+    def draw_left_mask(self, road):
+        road_trace = np.where(road[:, :50] == 1)
+        min_y = road_trace[1].min()
+        max_y = road_trace[1].max()
+        yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
+        xx = (min_y, max_y)
+        poly = np.polyfit(xx, yy, 1)
+        if poly[0] < -0.5:
+            return road
+        yy = poly[0] * np.arange(320) + poly[1]
+        
+        right_trace = np.where(road[120:, 200:] == 0)
+        if (len(right_trace[1]) == 0):
+            umin_x = 200
+        else:
+            umin_x = right_trace[0].min() + 200
+        
+        for i in range(320):
+            road[0:int(yy[i]), i] = 0
+            if i > umin_x:
+                road[:, i] = 0
+        return road
+
+    def draw_right_mask(self, road):
+        road_trace = np.where(road[:, 270:] == 1)
+        min_y = road_trace[1].min()
+        max_y = road_trace[1].max()
+        yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
+        xx = (min_y + 270, max_y + 270)
+        poly = np.polyfit(xx, yy, 1)
+        if poly[0] > 0.5:
+            return road
+        yy = poly[0] * np.arange(320) + poly[1]
+        
+        right_trace = np.where(road[120:, :120] == 0)
+        if (len(right_trace[1]) == 0):
+            umin_x = 200
+        else:
+            umin_x = right_trace[0].max()
+        
+        for i in range(320):
+            road[0:int(yy[i]), i] = 0
+            if i < umin_x:
+                road[:, i] = 0
+        return road
         
     def get_run_model(self, model_link, weight_link):
         '''
