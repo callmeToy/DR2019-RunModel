@@ -71,6 +71,7 @@ class CarControl:
     road = None
     put_mask = False
     early_stop = 0
+    ready_for_early_stop = False
     car = None
     sign_image = None
     car_image = None
@@ -197,6 +198,7 @@ class CarControl:
         self.left_lane = None
         self.right_lane = None
         self.prepare_to_turn = False
+        self.ready_for_early_stop = False
 
     def road_thread(self):
         print('Road thread online')
@@ -206,17 +208,17 @@ class CarControl:
                 sr = np.sum(self.road[:, 160:])
 
                 if sl + sr < 50:
-                    print('Reset detected')
+                    # print('Reset detected')
                     self.prepare_to_turn = False
                     self.right_turn_count = 0
                     self.left_turn_count = 0
                     self.turning_index = 0
                     self.start_turning = 0
                 elif (sl < 50):
-                    print('Outline right')
+                    # print('Outline right')
                     self.road_error = 200
                 elif (sr < 50):
-                    print('Outline left')
+                    # print('Outline left')
                     self.road_error = -200
                 else:
                     self.road_error = self.error_matrix_method(self.road.copy())
@@ -312,8 +314,8 @@ class CarControl:
                         print('up the music ey ey ey')
                 else:
                     if self.left_turn_count + self.right_turn_count > 0:
-                        if self.early_stop >= 3:
-                            self.cancel_operation();
+                        if self.early_stop >= 3 and self.early_stop:
+                            self.cancel_operation()
                             print('Early stop')
                         elif self.tm.millis() - self.last_sign_spotted < 3000:
                             curr_speed -= 10
@@ -344,6 +346,9 @@ class CarControl:
                 else:
                     self.final_speed = curr_speed - abs(angle * 1.2)
                 self.final_angle = angle + offset
+                if abs(self.final_angle) > 20:
+                    if self.put_mask:
+                        self.ready_for_early_stop = True
                 self.fetching_image = True
             else:
                 time.sleep(0.000001)
@@ -377,19 +382,22 @@ class CarControl:
         return poly
 
     def draw_left_mask(self, road):
-        print('Drawing left mask')
+        # print('Drawing left mask')
         road_trace = np.where(road[:, :50] == 1)
-        if len(road_trace[1]) == 0:
+        if len(road_trace[1]) <= 50:
             return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
         yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
         xx = (min_y, max_y)
         poly = np.polyfit(xx, yy, 1)
+        print(poly)
         if poly[0] < -0.5:
-            self.early_stop += 1
+            if self.ready_for_early_stop:
+                self.early_stop += 1
             return road
         yy = poly[0] * np.arange(320) + poly[1]
+        yy = np.clip(yy, 0, 240)
 
         if self.right_lane is None:
             self.right_poly = self.render_right_lane(road)
@@ -398,27 +406,30 @@ class CarControl:
             self.right_lane = np.clip(ry, 0, 240)
 
         for i in range(320):
-            road[0:int(yy[i]), i] = 0
-            road[0:int(self.right_lane[i]), i] = 0
-            if abs(self.right_poly[0]) > 10 or abs(self.right_poly[0]) < 0.01:
+            road[0:int(self.right_lane[i]), i] = 0.0
+            road[0:int(yy[i]), i] = 0.5
+            if abs(self.right_poly[0]) > 1.2 or abs(self.right_poly[0]) < 0.01:
                 if i > 240:
                     road[:, i] = 0
         return road
 
     def draw_right_mask(self, road):
-        print('Drawing right mask')
+        # print('Drawing right mask')
         road_trace = np.where(road[:, 270:] == 1)
-        if len(road_trace[1]) == 0:
+        if len(road_trace[1]) <= 50:
             return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
         yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
         xx = (min_y + 270, max_y + 270)
         poly = np.polyfit(xx, yy, 1)
-        if poly[0] > 0.25:
-            self.early_stop += 1
+        print(poly)
+        if poly[0] > 0.5:
+            if self.ready_for_early_stop:
+                self.early_stop += 1
             return road
         yy = poly[0] * np.arange(320) + poly[1]
+        yy = np.clip(yy, 0, 240)
 
         if self.left_lane is None:
             self.left_poly = self.render_left_lane(road)
@@ -427,9 +438,9 @@ class CarControl:
             self.left_lane = np.clip(ly, 0, 240)
 
         for i in range(320):
-            road[0:int(yy[i]), i] = 0
-            road[0:int(self.left_lane[i]), i] = 0
-            if abs(self.left_poly[0]) > 10 or abs(self.left_poly[0]) < 0.01:
+            road[0:int(self.left_lane[i]), i] = 0.0
+            road[0:int(yy[i]), i] = 0.5
+            if abs(self.left_poly[0]) > 1.2 or abs(self.left_poly[0]) < 0.01:
                 if i < 120:
                     road[:, i] = 0
         return road
@@ -517,9 +528,15 @@ class CarControl:
         else:
             weights = [0.1, 0.3, 0.7, 1.1, 1.5, 0.1, 0.0]
 
-        cv2.imshow('road', road)
-        if cv2.waitKey(1):
-            pass
+        if self.sign is not None and self.car is not None:
+            seg = np.empty((240, 320, 3))
+            seg[:, :, 1] = road.copy()
+            seg[:, :, 0] = self.sign.copy()
+            seg[:, :, 2] = self.car.copy()
+            cv2.imshow('Segment', (seg * 255).astype(np.uint8))
+            if cv2.waitKey(1):
+                pass
+        road[road < 0.52] = 0
 
         matrix = self.distance_matrix(road)
         matrix = matrix.astype(np.int64)
@@ -543,7 +560,7 @@ class CarControl:
             bndb = [on[1].min(), on[0].min(), on[1].max(), on[0].max()]
             bndb[2] = bndb[2] - bndb[0]
             bndb[3] = bndb[3] - bndb[1]
-            if bndb[0] != 0 and bndb[1] != 0 and bndb[0] < 280:
+            if bndb[0] != 0 and bndb[1] != 0 and bndb[0] < 300:
                 if bndb[2] * bndb[3] > area:
                     bnds = [bndb]
         bnds = np.array(bnds, np.uint16)
