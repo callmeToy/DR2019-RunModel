@@ -70,7 +70,7 @@ class CarControl:
     sign = None
     road = None
     put_mask = False
-    early_stop = False
+    early_stop = 0
     car = None
     sign_image = None
     car_image = None
@@ -80,6 +80,10 @@ class CarControl:
     turning = False
     final_speed = 0
     final_angle = 0
+    left_lane = None
+    right_lane = None
+    right_poly = None
+    left_poly = None
     
     ready = False
 
@@ -89,7 +93,7 @@ class CarControl:
     last_image_time = 0
     base_time = 55.5
 
-    def __init__(self, image_size = (240, 320), speed_limit=50, angle_limit = 50):
+    def __init__(self, image_size = (240, 320), speed_limit=60, angle_limit = 50):
         '''
         Car Control class init function
         '''
@@ -184,10 +188,15 @@ class CarControl:
                 time.sleep(0.000001)
 
     def cancel_operation(self):
-        self.turning = False
-        self.prepare_to_turn = False
-        self.right_turn_count = 0
         self.left_turn_count = 0
+        self.right_turn_count = 0
+        self.put_mask = False
+        self.early_stop = 0
+        self.right_poly = None
+        self.left_poly = None
+        self.left_lane = None
+        self.right_lane = None
+        self.prepare_to_turn = False
 
     def road_thread(self):
         print('Road thread online')
@@ -216,7 +225,8 @@ class CarControl:
                 time.sleep(0.000001)
 
     def seg_thread(self):
-        run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Unet4c-optimized.json', pkg_path + '/scripts/Saved Models/Weights/unet4c-optimized.h5')
+        # run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Unet4c-optimized.json', pkg_path + '/scripts/Saved Models/Weights/unet4c-optimized.h5')
+        run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Tuyen_seg_model.json', pkg_path + '/scripts/Saved Models/Weights/Tuyen_seg_model_addition.h5')
         pred_img = np.zeros((1, 240, 320, 3))
         prediction = run_model.predict(pred_img)
         kernel5 = np.ones((5, 5), np.uint8)
@@ -237,13 +247,18 @@ class CarControl:
                 if (np.sum(pred_sign) > 50):
                     self.sign_image = image_feed.copy()
 
-                pred_car = prediction[0, :, :, 3]
-                pred_car = 1 - pred_car
-                pred_car = np.clip(pred_car - cv2.bitwise_or(pred_road, pred_sign), 0, 1)
+                pred_car = prediction[0, :, :, 1]
+                # pred_car = 1 - pred_car
+                # pred_car = np.clip(pred_car - cv2.bitwise_or(pred_road, pred_sign), 0, 1)
 
+                # pred_sign = cv2.GaussianBlur(pred_sign, (5, 5), 0)
                 pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_OPEN, kernel5)
                 pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_CLOSE, kernel5)
+                # pred_sign[pred_sign>0.2] = 1
                 self.sign = pred_sign
+                # cv2.imshow('Sign', self.sign)
+                # if cv2.waitKey(1):
+                #     pass
                 bnds = self.get_bounding_rect(pred_sign)
                 
                 if bnds is None or len(bnds) == 0:
@@ -257,11 +272,15 @@ class CarControl:
                         cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
                         self.cropped_sign = cv2.resize(cropped, (64, 64))
                     self.last_sign_spotted = self.tm.millis()
+                # pred_car = cv2.GaussianBlur(pred_car, (5, 5), 0)
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_OPEN, kernel5)
                 pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_CLOSE, kernel5)
+                # pred_car[pred_car>0.2] = 1
                 
+                # pred_road = cv2.GaussianBlur(pred_road, (5, 5), 0)
                 pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_OPEN, kernel7)
                 pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_CLOSE, kernel7)
+                # pred_road[pred_road>0.2] = 1
                 self.road = pred_road
 
                 if len(np.where(pred_car == 1)[0] > 0):
@@ -283,7 +302,7 @@ class CarControl:
                 kI = 0.005
                 kD = 320
                 if self.prepare_to_turn:
-                    curr_speed -= 15
+                    curr_speed -= 20
                     print('Prepare to turn ', end='')
                     if (self.left_turn_count > self.right_turn_count):
                         print('left')
@@ -293,25 +312,22 @@ class CarControl:
                         print('up the music ey ey ey')
                 else:
                     if self.left_turn_count + self.right_turn_count > 0:
-                        if self.early_stop:
-                            self.left_turn_count = 0
-                            self.right_turn_count = 0
-                            self.put_mask = False
-                            self.early_stop = False
+                        if self.early_stop >= 3:
+                            self.cancel_operation();
                             print('Early stop')
                         elif self.tm.millis() - self.last_sign_spotted < 3000:
                             curr_speed -= 10
                             self.put_mask = True
-                            kP -= 0.03
-                            kI += 0.15
+                            # kP -= 0.02
+                            kI += 0.25
                             if self.left_turn_count > self.right_turn_count:
-                                offset = 4
+                                # offset = 4
+                                pass
                             elif self.right_turn_count > self.left_turn_count:
-                                offset = -4
+                                # offset = -4
+                                pass
                         else:
-                            self.left_turn_count = 0
-                            self.right_turn_count = 0
-                            self.put_mask = False
+                            self.cancel_operation()
                             print('Stop drawing')
                     else:
                         car_pxs = len(np.where(self.car == 1)[0])
@@ -332,6 +348,34 @@ class CarControl:
             else:
                 time.sleep(0.000001)
 
+    def render_right_lane(self, road):
+        lane_trace = np.where(road[:, 160:] == 0)
+        mx = lane_trace[0].max()
+        mm = mx - 10
+        while True:
+            if len(lane_trace[1][lane_trace[0] == mm]) == 0:
+                mm -= 1
+            else:
+                break
+        xx = (lane_trace[1][lane_trace[0] == mx].min() + 160, lane_trace[1][lane_trace[0] == mm].min() + 160)
+        yy = (mx, mm)
+        poly = np.polyfit(xx, yy, 1)
+        return poly
+
+    def render_left_lane(self, road):
+        lane_trace = np.where(road[:, :160] == 0)
+        mx = lane_trace[0].max()
+        mm = mx - 10
+        while True:
+            if len(lane_trace[1][lane_trace[0] == mm]) == 0:
+                mm -= 1
+            else:
+                break
+        xx = (lane_trace[1][lane_trace[0] == mx].max(), lane_trace[1][lane_trace[0] == mm].max())
+        yy = (mx, mm)
+        poly = np.polyfit(xx, yy, 1)
+        return poly
+
     def draw_left_mask(self, road):
         print('Drawing left mask')
         road_trace = np.where(road[:, :50] == 1)
@@ -343,20 +387,22 @@ class CarControl:
         xx = (min_y, max_y)
         poly = np.polyfit(xx, yy, 1)
         if poly[0] < -0.5:
-            self.early_stop = True
+            self.early_stop += 1
             return road
         yy = poly[0] * np.arange(320) + poly[1]
-        
-        right_trace = np.where(road[120:, 220:] == 0)
-        if (len(right_trace[1]) == 0):
-            umin_x = 220
-        else:
-            umin_x = right_trace[0].min() + 220
-        
+
+        if self.right_lane is None:
+            self.right_poly = self.render_right_lane(road)
+            offset = 160 * 0.4 + self.right_poly[1] * 0.6
+            ry = self.right_poly[0] * np.arange(320) + offset
+            self.right_lane = np.clip(ry, 0, 240)
+
         for i in range(320):
             road[0:int(yy[i]), i] = 0
-            if i > umin_x:
-                road[:, i] = 0
+            road[0:int(self.right_lane[i]), i] = 0
+            if abs(self.right_poly[0]) > 10 or abs(self.right_poly[0]) < 0.01:
+                if i > 240:
+                    road[:, i] = 0
         return road
 
     def draw_right_mask(self, road):
@@ -370,20 +416,22 @@ class CarControl:
         xx = (min_y + 270, max_y + 270)
         poly = np.polyfit(xx, yy, 1)
         if poly[0] > 0.25:
-            self.early_stop = True
+            self.early_stop += 1
             return road
         yy = poly[0] * np.arange(320) + poly[1]
-        
-        right_trace = np.where(road[120:, :140] == 0)
-        if (len(right_trace[1]) == 0):
-            umin_x = 140
-        else:
-            umin_x = right_trace[0].max()
-        
+
+        if self.left_lane is None:
+            self.left_poly = self.render_left_lane(road)
+            offset = self.left_poly[1] * 1.3
+            ly = self.left_poly[0] * np.arange(320) + offset
+            self.left_lane = np.clip(ly, 0, 240)
+
         for i in range(320):
             road[0:int(yy[i]), i] = 0
-            if i < 80:
-                road[:, i] = 0
+            road[0:int(self.left_lane[i]), i] = 0
+            if abs(self.left_poly[0]) > 10 or abs(self.left_poly[0]) < 0.01:
+                if i < 120:
+                    road[:, i] = 0
         return road
         
     def get_run_model(self, model_link, weight_link):
@@ -461,13 +509,13 @@ class CarControl:
     def error_matrix_method(self, road):
 
         if self.put_mask:
-            weights = [0.0, 0.0, 0.0, 0.0, 0.0, 1.5, 2.1]
+            weights = [0.0, 0.0, 0.0, 0.0, 0.1, 1.5, 2.1]
             if self.left_turn_count > self.right_turn_count:
                 road = self.draw_left_mask(road)
             elif self.right_turn_count > self.left_turn_count:
                 road = self.draw_right_mask(road)
         else:
-            weights = [0.1, 0.3, 0.7, 1.1, 1.5, 0.0, 0.0]
+            weights = [0.1, 0.3, 0.7, 1.1, 1.5, 0.1, 0.0]
 
         cv2.imshow('road', road)
         if cv2.waitKey(1):
@@ -592,7 +640,9 @@ class CarControl:
         # print(', Angle: {0:.2f}'.format(self.final_angle))
 
         # print('Mean image time: {}'.format(self.mean_time))
-        return [self.final_speed, self.final_angle]
+        speed = np.clip(self.final_speed, 0, self.constrain_speed)
+        angle = np.clip(self.final_angle, -self.constrain_angle, self.constrain_angle)
+        return [speed, angle]
 
 class TimeMetrics:
     def __init__(self):
@@ -667,16 +717,6 @@ class ROSControl:
                 self.current_angle = float(controls[1])
                 self.newImage = False
                 self.newControl = True
-
-                # if self.cControl.cropped_sign is not None:
-                #     cv2.imshow('sign', self.cControl.cropped_sign)
-                #     if cv2.waitKey(1) & 0xFF == ord('q'):
-                #         break
-
-                # if self.cControl.road is not None:
-                #     cv2.imshow('feed', self.cControl.road)
-                #     if cv2.waitKey(1) & 0xFF == ord('q'):
-                #         break
             else:
                 time.sleep(0.1)
 
