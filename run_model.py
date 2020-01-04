@@ -164,34 +164,41 @@ class CarControl:
         cv2.imwrite(path, img)
     
     def sign_thread(self):
-        sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign.json', pkg_path + '/scripts/Saved Models/Weights/sign.h5')
-        # sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign_new.json', pkg_path + '/scripts/Saved Models/Weights/sign_new.h5')
-        pred_img = np.zeros((1, 64, 64, 3))
-        prediction = sign_model.predict(pred_img)
-        print('Sign thread online')
+        try:
+            sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign.json', pkg_path + '/scripts/Saved Models/Weights/sign.h5')
+            # sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign_new.json', pkg_path + '/scripts/Saved Models/Weights/sign_new.h5')
+            pred_img = np.zeros((1, 64, 64, 3))
+            prediction = sign_model.predict(pred_img)
+            print('Sign thread online')
 
-        while True:
-            if self.cropped_sign is not None:
-                pred_sign = np.expand_dims(cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB), 0)
-                prediction = sign_model.predict(pred_sign)
-                prediction = prediction[0]
+            while True:
+                if self.cropped_sign is not None:
+                    pred_sign = np.expand_dims(cv2.cvtColor(self.cropped_sign, cv2.COLOR_BGR2RGB), 0)
+                    prediction = sign_model.predict(pred_sign)
+                    prediction = prediction[0]
 
-                idx = np.argmax(prediction)
-                if idx == 1: #Right sign
-                    print('Right sign')
-                    self.prepare_to_turn = True
-                    self.right_turn_count += 1
-                elif idx == 2: #Left sign
-                    print('Left sign')
-                    self.prepare_to_turn = True
-                    self.left_turn_count += 1
-                else: #Dont know
-                    print('No idea')
-                    self.prepare_to_turn = True
-                self.last_sign_spotted = self.tm.millis()
-                self.cropped_sign = None
-            else:
-                time.sleep(0.000001)
+                    try:
+                        idx = np.argmax(prediction)
+                        if idx == 1: #Right sign
+                            print('Right sign')
+                            self.prepare_to_turn = True
+                            self.right_turn_count += 1
+                        elif idx == 2: #Left sign
+                            print('Left sign')
+                            self.prepare_to_turn = True
+                            self.left_turn_count += 1
+                        else: #Dont know
+                            print('No idea')
+                            self.prepare_to_turn = True
+                        self.last_sign_spotted = self.tm.millis()
+                        self.cropped_sign = None
+                    except:
+                        print('Error processing sign')
+                else:
+                    time.sleep(0.000001)
+        except:
+            print('Sign thread got fucked up')
+            self.sign_thread()
 
     def cancel_operation(self):
         self.left_turn_count = 0
@@ -209,157 +216,171 @@ class CarControl:
         self.prev_I = 0
 
     def road_thread(self):
-        print('Road thread online')
-        while True:
-            if not (self.road is None):
-                sl = np.sum(self.road[:, :160])
-                sr = np.sum(self.road[:, 160:])
+        try:
+            print('Road thread online')
+            while True:
+                if not (self.road is None):
+                    sl = np.sum(self.road[:, :160])
+                    sr = np.sum(self.road[:, 160:])
 
-                if sl + sr < 50:
-                    # print('Reset detected')
-                    self.prepare_to_turn = False
-                    self.right_turn_count = 0
-                    self.left_turn_count = 0
-                    self.turning_index = 0
-                    self.start_turning = 0
-                elif sl < 50:
-                    # print('Outline right')
-                    self.road_error = 200
-                elif sr < 50:
-                    # print('Outline left')
-                    self.road_error = -200
+                    if sl + sr < 50:
+                        # print('Reset detected')
+                        self.prepare_to_turn = False
+                        self.right_turn_count = 0
+                        self.left_turn_count = 0
+                        self.turning_index = 0
+                        self.start_turning = 0
+                    elif sl < 50:
+                        # print('Outline right')
+                        self.road_error = 200
+                    elif sr < 50:
+                        # print('Outline left')
+                        self.road_error = -200
+                    else:
+                        self.road_error = self.error_matrix_method(self.road.copy())
+                        self.road = None
                 else:
-                    self.road_error = self.error_matrix_method(self.road.copy())
-                    self.road = None
-            else:
-                time.sleep(0.000001)
+                    time.sleep(0.000001)
+        except:
+            print('Road thread got fucked up')
+            self.road_thread()
 
     def seg_thread(self):
-        # run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Unet4c-optimized.json', pkg_path + '/scripts/Saved Models/Weights/unet4c-optimized.h5')
-        run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Tuyen_seg_model.json', pkg_path + '/scripts/Saved Models/Weights/Tuyen_seg_model_addition.h5')
-        pred_img = np.zeros((1, 240, 320, 3))
-        prediction = run_model.predict(pred_img)
-        kernel5 = np.ones((5, 5), np.uint8)
-        kernel7 = np.ones((7, 7), np.uint8)
-        self.ready = True
-        print('Segment thread online')
-        print('Ready to connect')
+        try:
+            # run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Unet4c-optimized.json', pkg_path + '/scripts/Saved Models/Weights/unet4c-optimized.h5')
+            run_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Tuyen_seg_model.json', pkg_path + '/scripts/Saved Models/Weights/Tuyen_seg_model_addition.h5')
+            pred_img = np.zeros((1, 240, 320, 3))
+            prediction = run_model.predict(pred_img)
+            kernel5 = np.ones((5, 5), np.uint8)
+            kernel7 = np.ones((7, 7), np.uint8)
+            self.ready = True
+            print('Segment thread online')
+            print('Ready to connect')
 
-        while True:
-            if not self.fetching_image:
-                image_feed = self.image_feed.copy()
-                pred_img = np.expand_dims(image_feed, axis = 0)
-                prediction = run_model.predict(pred_img)
+            while True:
+                if not self.fetching_image:
+                    image_feed = self.image_feed.copy()
+                    pred_img = np.expand_dims(image_feed, axis = 0)
+                    prediction = run_model.predict(pred_img)
+                    try:
+                        pred_road = prediction[0, :, :, 0]
 
-                pred_road = prediction[0, :, :, 0]
+                        pred_sign = prediction[0, :, :, 2]
+                        if (np.sum(pred_sign) > 50):
+                            self.sign_image = image_feed.copy()
 
-                pred_sign = prediction[0, :, :, 2]
-                if (np.sum(pred_sign) > 50):
-                    self.sign_image = image_feed.copy()
+                        pred_car = prediction[0, :, :, 1]
+                        # pred_car = 1 - pred_car
+                        # pred_car = np.clip(pred_car - cv2.bitwise_or(pred_road, pred_sign), 0, 1)
 
-                pred_car = prediction[0, :, :, 1]
-                # pred_car = 1 - pred_car
-                # pred_car = np.clip(pred_car - cv2.bitwise_or(pred_road, pred_sign), 0, 1)
+                        # pred_sign = cv2.GaussianBlur(pred_sign, (5, 5), 0)
+                        pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_OPEN, kernel5)
+                        pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_CLOSE, kernel5)
+                        # pred_sign[pred_sign>0.2] = 1
+                        self.sign = pred_sign
+                        # cv2.imshow('Sign', self.sign)
+                        # if cv2.waitKey(1):
+                        #     pass
+                        bnds = self.get_bounding_rect(pred_sign)
+                        
+                        if bnds is None or len(bnds) == 0:
+                            if self.prepare_to_turn:
+                                self.prepare_to_turn = False
+                                print('Start turning')
+                        else:
+                            for rect in bnds:
+                                offset_h = int(rect[3] * 0.2) * 0
+                                offset_w = int(rect[2] * 0.2) * 0
+                                cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
+                                self.cropped_sign = cv2.resize(cropped, (64, 64))
+                            self.last_sign_spotted = self.tm.millis()
+                        # pred_car = cv2.GaussianBlur(pred_car, (5, 5), 0)
+                        pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_OPEN, kernel5)
+                        pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_CLOSE, kernel5)
+                        # pred_car[pred_car>0.2] = 1
+                        
+                        # pred_road = cv2.GaussianBlur(pred_road, (5, 5), 0)
+                        pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_OPEN, kernel7)
+                        pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_CLOSE, kernel7)
+                        # pred_road[pred_road>0.2] = 1
+                        self.road = pred_road
 
-                # pred_sign = cv2.GaussianBlur(pred_sign, (5, 5), 0)
-                pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_OPEN, kernel5)
-                pred_sign = cv2.morphologyEx(pred_sign, cv2.MORPH_CLOSE, kernel5)
-                # pred_sign[pred_sign>0.2] = 1
-                self.sign = pred_sign
-                # cv2.imshow('Sign', self.sign)
-                # if cv2.waitKey(1):
-                #     pass
-                bnds = self.get_bounding_rect(pred_sign)
-                
-                if bnds is None or len(bnds) == 0:
-                    if self.prepare_to_turn:
-                        self.prepare_to_turn = False
-                        print('Start turning')
+                        if len(np.where(pred_car == 1)[0] > 0):
+                            self.car_image = np.copy(pred_road)
+                        
+                        self.car = pred_car
+                    except:
+                        print('Segment fucked up again :D')
                 else:
-                    for rect in bnds:
-                        offset_h = int(rect[3] * 0.2) * 0
-                        offset_w = int(rect[2] * 0.2) * 0
-                        cropped = self.sign_image[rect[1] - offset_h:rect[1] + rect[3] + offset_h, rect[0] - offset_w:rect[0] + rect[2] + offset_w]
-                        self.cropped_sign = cv2.resize(cropped, (64, 64))
-                    self.last_sign_spotted = self.tm.millis()
-                # pred_car = cv2.GaussianBlur(pred_car, (5, 5), 0)
-                pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_OPEN, kernel5)
-                pred_car = cv2.morphologyEx(pred_car, cv2.MORPH_CLOSE, kernel5)
-                # pred_car[pred_car>0.2] = 1
-                
-                # pred_road = cv2.GaussianBlur(pred_road, (5, 5), 0)
-                pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_OPEN, kernel7)
-                pred_road = cv2.morphologyEx(pred_road, cv2.MORPH_CLOSE, kernel7)
-                # pred_road[pred_road>0.2] = 1
-                self.road = pred_road
-
-                if len(np.where(pred_car == 1)[0] > 0):
-                    self.car_image = np.copy(pred_road)
-                
-                self.car = pred_car
-            else:
-                if self.tm.millis() - self.last_image_time > 2 * self.mean_time:
-                    self.fetching_image = True
-                time.sleep(0.000001)
+                    if self.tm.millis() - self.last_image_time > 2 * self.mean_time:
+                        self.fetching_image = True
+                    time.sleep(0.000001)
+        except:
+            print('Segment thread got fucked up, restarting')
+            self.seg_thread()
 
     def decide_thread(self):
-        print('Control thread online')
-        while True:
-            if (not self.fetching_image) and self.ready:
-                curr_speed = 60
-                offset = 0
-                kP = 0.10
-                kI = 0.005
-                kD = 320
-                if self.prepare_to_turn:
-                    curr_speed -= 20
-                    print('Prepare to turn ', end='')
-                    if self.left_turn_count > self.right_turn_count:
-                        print('left')
-                    elif self.left_turn_count < self.right_turn_count:
-                        print('right')
-                    else:
-                        print('up the music ey ey ey')
-                else:
-                    if self.left_turn_count + self.right_turn_count > 0:
-                        if self.early_stop >= 2 and self.early_stop:
-                            self.cancel_operation()
-                            print('Early stop')
-                        elif self.tm.millis() - self.last_sign_spotted < 3000:
-                            curr_speed -= 10
-                            self.put_mask = True
-                            # kP -= 0.02
-                            kI += 0.25
-                            if self.left_turn_count > self.right_turn_count:
-                                # offset = 4
-                                pass
-                            elif self.right_turn_count > self.left_turn_count:
-                                # offset = -4
-                                pass
+        try:
+            print('Control thread online')
+            while True:
+                if (not self.fetching_image) and self.ready:
+                    curr_speed = 60
+                    offset = 0
+                    kP = 0.10
+                    kI = 0.005
+                    kD = 320
+                    if self.prepare_to_turn:
+                        curr_speed -= 20
+                        print('Prepare to turn ', end='')
+                        if self.left_turn_count > self.right_turn_count:
+                            print('left')
+                        elif self.left_turn_count < self.right_turn_count:
+                            print('right')
                         else:
-                            self.cancel_operation()
-                            print('Stop drawing')
+                            print('up the music ey ey ey')
                     else:
-                        car_pxs = len(np.where(self.car == 1)[0])
-                        if car_pxs > 350:
-                            curr_speed -= 5
-                            kP += 0.02
-                            kI += 0.0
-                            offset = self.find_car_offset(self.car_image, self.car, 4)
+                        if self.left_turn_count + self.right_turn_count > 0:
+                            if self.early_stop >= 2 and self.early_stop:
+                                self.cancel_operation()
+                                print('Early stop')
+                            elif self.tm.millis() - self.last_sign_spotted < 3000:
+                                curr_speed -= 10
+                                self.put_mask = True
+                                # kP -= 0.02
+                                kI += 0.25
+                                if self.left_turn_count > self.right_turn_count:
+                                    # offset = 4
+                                    pass
+                                elif self.right_turn_count > self.left_turn_count:
+                                    # offset = -4
+                                    pass
+                            else:
+                                self.cancel_operation()
+                                print('Stop drawing')
+                        else:
+                            car_pxs = len(np.where(self.car == 1)[0])
+                            if car_pxs > 350:
+                                curr_speed -= 5
+                                kP += 0.02
+                                kI += 0.0
+                                offset = self.find_car_offset(self.car_image, self.car, 4)
 
-                angle = self.calc_pid(self.road_error, kP, kI, kD)
+                    angle = self.calc_pid(self.road_error, kP, kI, kD)
 
-                if self.put_mask:
-                    self.final_speed = curr_speed - abs(angle * 0.6)
-                else:
-                    self.final_speed = curr_speed - abs(angle * 1.2)
-                self.final_angle = angle + offset
-                if abs(self.final_angle) > 20:
                     if self.put_mask:
-                        self.ready_for_early_stop = True
-                self.fetching_image = True
-            else:
-                time.sleep(0.000001)
+                        self.final_speed = curr_speed - abs(angle * 0.6)
+                    else:
+                        self.final_speed = curr_speed - abs(angle * 1.2)
+                    self.final_angle = angle + offset
+                    if abs(self.final_angle) > 20:
+                        if self.put_mask:
+                            self.ready_for_early_stop = True
+                    self.fetching_image = True
+                else:
+                    time.sleep(0.000001)
+        except:
+            print('Control thread got fucked up')
+            self.decide_thread()
 
     def render_right_lane(self, road):
         lane_trace = np.where(road[:, 160:] == 0)
@@ -415,6 +436,7 @@ class CarControl:
             offset = 160 * 0.4 + self.right_poly[1] * 0.6
             ry = self.right_poly[0] * np.arange(320) + offset
             self.right_lane = np.clip(ry, 0, 240)
+            self.right_lane[:160] = 0
 
         for i in range(320):
             road[0:int(self.right_lane[i]), i] = 0.0
@@ -454,6 +476,7 @@ class CarControl:
             offset = self.left_poly[1] * 1.3
             ly = self.left_poly[0] * np.arange(320) + offset
             self.left_lane = np.clip(ly, 0, 240)
+            self.left_lane[160:] = 0
 
         for i in range(320):
             road[0:int(self.left_lane[i]), i] = 0.0
