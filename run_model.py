@@ -72,6 +72,7 @@ class CarControl:
     put_mask = False
     early_stop = 0
     ready_for_early_stop = False
+    lost_sign_count = 0
     car = None
     sign_image = None
     car_image = None
@@ -93,6 +94,8 @@ class CarControl:
     frame_count = 0
     last_image_time = 0
     base_time = 55.5
+
+    out_video = None
 
     def __init__(self, image_size = (240, 320), speed_limit=60, angle_limit = 50):
         '''
@@ -139,6 +142,8 @@ class CarControl:
         Thread(target=self.sign_thread).start()
         Thread(target=self.decide_thread).start()
 
+        self.out_video = cv2.VideoWriter('./Videos/video_feed.avi',cv2.VideoWriter_fourcc('M','J','P','G'), 2, (320, 240))
+
         print('Car control instance initialized with the following parameters: \n   Image size: {}x{}\n   Speed limit: {}\n   Angle limit: {}'.format(self.image_width, self.image_height, self.constrain_speed, self.constrain_angle))
         print('Ready to connect')
 
@@ -154,9 +159,9 @@ class CarControl:
             self.frame_count += 1
         self.last_image_time = self.tm.millis()
 
-    def save_sign(self, sign):
-        path = pkg_path + '/scripts/Signs_data/{}.jpg'.format(self.tm.millis())
-        cv2.imwrite(path, sign)
+    def save_img(self, img):
+        path = pkg_path + '/scripts/Videos/{}.jpg'.format(self.tm.millis())
+        cv2.imwrite(path, img)
     
     def sign_thread(self):
         sign_model = self.get_run_model(pkg_path + '/scripts/Saved Models/Model/Sign.json', pkg_path + '/scripts/Saved Models/Weights/sign.h5')
@@ -199,6 +204,9 @@ class CarControl:
         self.right_lane = None
         self.prepare_to_turn = False
         self.ready_for_early_stop = False
+        self.lost_sign_count = 0
+        self.prev_error = 0
+        self.prev_I = 0
 
     def road_thread(self):
         print('Road thread online')
@@ -214,10 +222,10 @@ class CarControl:
                     self.left_turn_count = 0
                     self.turning_index = 0
                     self.start_turning = 0
-                elif (sl < 50):
+                elif sl < 50:
                     # print('Outline right')
                     self.road_error = 200
-                elif (sr < 50):
+                elif sr < 50:
                     # print('Outline left')
                     self.road_error = -200
                 else:
@@ -306,15 +314,15 @@ class CarControl:
                 if self.prepare_to_turn:
                     curr_speed -= 20
                     print('Prepare to turn ', end='')
-                    if (self.left_turn_count > self.right_turn_count):
+                    if self.left_turn_count > self.right_turn_count:
                         print('left')
-                    elif (self.left_turn_count < self.right_turn_count):
+                    elif self.left_turn_count < self.right_turn_count:
                         print('right')
                     else:
                         print('up the music ey ey ey')
                 else:
                     if self.left_turn_count + self.right_turn_count > 0:
-                        if self.early_stop >= 3 and self.early_stop:
+                        if self.early_stop >= 2 and self.early_stop:
                             self.cancel_operation()
                             print('Early stop')
                         elif self.tm.millis() - self.last_sign_spotted < 3000:
@@ -333,7 +341,7 @@ class CarControl:
                             print('Stop drawing')
                     else:
                         car_pxs = len(np.where(self.car == 1)[0])
-                        if car_pxs > 500:
+                        if car_pxs > 350:
                             curr_speed -= 5
                             kP += 0.02
                             kI += 0.0
@@ -383,16 +391,18 @@ class CarControl:
 
     def draw_left_mask(self, road):
         # print('Drawing left mask')
-        road_trace = np.where(road[:, :50] == 1)
+        road_trace = np.where(road[90:, :50] == 1)
         if len(road_trace[1]) <= 50:
+            if self.ready_for_early_stop:
+                self.early_stop += 1
             return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
-        yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
+        yy = (road_trace[0][road_trace[1] == min_y].min() + 90, road_trace[0][road_trace[1] == max_y].min() + 90)
         xx = (min_y, max_y)
         poly = np.polyfit(xx, yy, 1)
         print(poly)
-        if poly[0] < -0.5:
+        if poly[0] < -0.35:
             if self.ready_for_early_stop:
                 self.early_stop += 1
             return road
@@ -401,6 +411,7 @@ class CarControl:
 
         if self.right_lane is None:
             self.right_poly = self.render_right_lane(road)
+            print('Right poly: {}'.format(self.right_poly))
             offset = 160 * 0.4 + self.right_poly[1] * 0.6
             ry = self.right_poly[0] * np.arange(320) + offset
             self.right_lane = np.clip(ry, 0, 240)
@@ -408,23 +419,29 @@ class CarControl:
         for i in range(320):
             road[0:int(self.right_lane[i]), i] = 0.0
             road[0:int(yy[i]), i] = 0.5
-            if abs(self.right_poly[0]) > 1.2 or abs(self.right_poly[0]) < 0.01:
+            # if abs(poly[1]) < 100:
+            #     road[0:int(yy[i]), i] = 0.5
+            # else:
+            #     road[:120,  i] = 0.5
+            if abs(self.right_poly[0]) > 1.2 or abs(self.right_poly[0]) < 0.15:
                 if i > 240:
                     road[:, i] = 0
         return road
 
     def draw_right_mask(self, road):
         # print('Drawing right mask')
-        road_trace = np.where(road[:, 270:] == 1)
+        road_trace = np.where(road[90:, 270:] == 1)
         if len(road_trace[1]) <= 50:
+            if self.ready_for_early_stop:
+                self.early_stop += 1
             return road
         min_y = road_trace[1].min()
         max_y = road_trace[1].max()
-        yy = (road_trace[0][road_trace[1] == min_y].min(), road_trace[0][road_trace[1] == max_y].min())
+        yy = (road_trace[0][road_trace[1] == min_y].min() + 90, road_trace[0][road_trace[1] == max_y].min() + 90)
         xx = (min_y + 270, max_y + 270)
         poly = np.polyfit(xx, yy, 1)
         print(poly)
-        if poly[0] > 0.5:
+        if poly[0] > 0.35:
             if self.ready_for_early_stop:
                 self.early_stop += 1
             return road
@@ -433,6 +450,7 @@ class CarControl:
 
         if self.left_lane is None:
             self.left_poly = self.render_left_lane(road)
+            print('Left poly: {}'.format(self.left_poly))
             offset = self.left_poly[1] * 1.3
             ly = self.left_poly[0] * np.arange(320) + offset
             self.left_lane = np.clip(ly, 0, 240)
@@ -440,7 +458,11 @@ class CarControl:
         for i in range(320):
             road[0:int(self.left_lane[i]), i] = 0.0
             road[0:int(yy[i]), i] = 0.5
-            if abs(self.left_poly[0]) > 1.2 or abs(self.left_poly[0]) < 0.01:
+            # if abs(poly[1]) < 100:
+            #     road[0:int(yy[i]), i] = 0.5
+            # else:
+            #     road[:120,  i] = 0.5
+            if abs(self.left_poly[0]) > 1.2 or abs(self.left_poly[0]) < 0.15:
                 if i < 120:
                     road[:, i] = 0
         return road
@@ -533,7 +555,9 @@ class CarControl:
             seg[:, :, 1] = road.copy()
             seg[:, :, 0] = self.sign.copy()
             seg[:, :, 2] = self.car.copy()
-            cv2.imshow('Segment', (seg * 255).astype(np.uint8))
+            seg = (seg * 255).astype(np.uint8)
+            self.out_video.write(seg)
+            cv2.imshow('Segment', seg)
             if cv2.waitKey(1):
                 pass
         road[road < 0.52] = 0
@@ -560,7 +584,9 @@ class CarControl:
             bndb = [on[1].min(), on[0].min(), on[1].max(), on[0].max()]
             bndb[2] = bndb[2] - bndb[0]
             bndb[3] = bndb[3] - bndb[1]
-            if bndb[0] != 0 and bndb[1] != 0 and bndb[0] < 300:
+            if bndb[0] < 280 and self.lost_sign_count <= 2:
+                self.lost_sign_count += 1
+            elif bndb[0] != 0 and bndb[1] != 0:
                 if bndb[2] * bndb[3] > area:
                     bnds = [bndb]
         bnds = np.array(bnds, np.uint16)
@@ -658,7 +684,15 @@ class CarControl:
 
         # print('Mean image time: {}'.format(self.mean_time))
         speed = np.clip(self.final_speed, 0, self.constrain_speed)
-        angle = np.clip(self.final_angle, -self.constrain_angle, self.constrain_angle)
+        if self.put_mask:
+            if self.left_turn_count > self.right_turn_count:
+                angle = np.clip(self.final_angle, -self.constrain_angle, 10)
+            elif self.right_turn_count > self.left_turn_count:
+                angle = np.clip(self.final_angle, -10, self.constrain_angle)
+            else:
+                angle = np.clip(self.final_angle, -self.constrain_angle, self.constrain_angle)
+        else:
+            angle = np.clip(self.final_angle, -self.constrain_angle, self.constrain_angle)
         return [speed, angle]
 
 class TimeMetrics:
@@ -711,6 +745,8 @@ class ROSControl:
         Thread(target=self.publish_thread).start()
         self.tm = TimeMetrics()
         rospy.spin()
+        if self.cControl.out_video is not None:
+            self.cControl.out_video.release()
 
     def publish_thread(self):
         while True:
